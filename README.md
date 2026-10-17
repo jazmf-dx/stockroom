@@ -64,4 +64,5 @@ npm test               # Rust のユニットテスト + 型チェック
 | [MODES.md](docs/MODES.md) | モードを分ける（ストックとフォント） |
 | [FONT_UI.md](docs/FONT_UI.md) | フォントの画面（見本・グループ分け・シェルフ・比較） |
 | [TEXT.md](docs/TEXT.md) | テキスト（Markdown・テキスト・CSV）：見る・編集・新規作成・文字コード |
+| [EXPORT.md](docs/EXPORT.md) | ライブラリ全体の書き出し（フォルダ構成どおり・差分・タグなどの一覧） |
 | [ROADMAP.md](docs/ROADMAP.md) | 今後の予定 |
