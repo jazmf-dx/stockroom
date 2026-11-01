@@ -21,6 +21,7 @@ import {
   type Tag,
   type View,
 } from "./lib/api";
+import { buildHas, OFF_SETTINGS } from "./lib/limits";
 import { fontApi } from "./features/fonts/api";
 import { fontShelf, querySystemFonts, refreshFontLinks, systemFonts } from "./features/fonts/system";
 import { filesApi, onFileThumbs } from "./features/files/api";
@@ -93,9 +94,10 @@ export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
 
 /** Groupings of each mode. */
 export const MODE_GROUPS: Record<Mode, GroupBy[]> = {
-  stock: ["none", "kind", "year", "month", "rating", "tag", "folder"],
+  // No 種類 grouping: the filter row's 種類 narrows to one kind instead (docs/UI.md).
+  stock: ["none", "month", "rating", "tag", "folder"],
   // Fonts are always one row per family (▸ opens its styles), so no family grouping.
-  font: ["none", "category", "script", "year", "month", "rating", "tag", "folder"],
+  font: ["none", "category", "script", "month", "rating", "tag", "folder"],
 };
 
 /** What the grid shows under each thumbnail. */
@@ -159,7 +161,7 @@ export interface ExportRequest {
 
 /**
  * The settings screen's pages: the app's (一般 … Claude), then the open
- * library's (概要, サイドバー). See docs/SETTINGS.md.
+ * library's (概要, 種類, 親子の紐づけ, サイドバー, フォルダの共有). See docs/SETTINGS.md.
  */
 export type SettingsTab =
   | "general"
@@ -167,6 +169,8 @@ export type SettingsTab =
   | "extension"
   | "claude"
   | "library"
+  | "libraryKinds"
+  | "libraryLinks"
   | "librarySidebar"
   | "libraryShare";
 
@@ -211,6 +215,8 @@ interface State {
   specimenFallback: boolean;
   inspectorOpen: boolean;
   sidebarOpen: boolean;
+  /** The list's table of contents (the sections to jump to) is open. Not kept: it closes on its own. */
+  tocOpen: boolean;
   /** Widths of the sidebar and the details panel (px), dragged at their edge. */
   sidebarWidth: number;
   inspectorWidth: number;
@@ -348,6 +354,8 @@ interface State {
   toggleFamily: (family: string) => void;
   /** Opens or closes a parent's children under its row (stock, links on). */
   toggleParent: (id: string) => void;
+  /** Opens every parent's children in the list, or closes them all. */
+  setAllParents: (open: boolean) => void;
   setSpecimenFallback: (on: boolean) => void;
   toggleInspector: () => void;
   setPanelTab: (tab: PanelTab) => void;
@@ -359,6 +367,7 @@ interface State {
   setComparing: (on: boolean) => void;
   setCompareLook: (look: CompareLook | ((l: CompareLook) => CompareLook)) => void;
   toggleSidebar: () => void;
+  setTocOpen: (open: boolean) => void;
   /** Sets a panel's width (kept within its limits, see PANEL_WIDTH). */
   setPanelWidth: (panel: "sidebar" | "inspector", px: number) => void;
   setShowSubfolders: (on: boolean) => void;
@@ -481,7 +490,8 @@ const loadLayout = (mode: Mode): Layout => {
 const loadGroupBy = (mode: Mode): GroupBy => {
   const keys = mode === "stock" ? ["groupBy:stock", "groupBy:all", "groupBy:image", "groupBy"] : [`groupBy:${mode}`];
   const saved = keys.map(load).find((v) => v !== null);
-  return MODE_GROUPS[mode].find((g) => g === saved) ?? "none";
+  // "year" was merged into "month" (年月).
+  return MODE_GROUPS[mode].find((g) => g === (saved === "year" ? "month" : saved)) ?? "none";
 };
 
 /** Conditions only images have (shape, pixel size), cleared when the list isn't of images alone. */
@@ -517,7 +527,8 @@ export function activeConditions(s: {
     (f.shapes.length ? 1 : 0) +
     (f.minWidth != null || f.maxWidth != null || f.minHeight != null || f.maxHeight != null ? 1 : 0) +
     (f.importedAfter != null || f.importedBefore != null ? 1 : 0) +
-    (f.minSize != null || f.maxSize != null ? 1 : 0)
+    (f.minSize != null || f.maxSize != null ? 1 : 0) +
+    (f.parentsOnly || f.childrenOnly || f.unlinkedOnly ? 1 : 0)
   );
 }
 
@@ -612,7 +623,7 @@ function linksFold(s: {
 }
 
 /** Groupings by what only library items have (docs/SYSTEM_FONTS.md). */
-export const LIBRARY_GROUPS: GroupBy[] = ["year", "month", "rating", "tag", "folder"];
+export const LIBRARY_GROUPS: GroupBy[] = ["month", "rating", "tag", "folder"];
 
 /** The grouping in effect: none for the installed fonts' list when it is by rating, tag or folder. */
 export const shownGroupBy = (s: { view: View; groupBy: GroupBy }): GroupBy =>
@@ -655,7 +666,8 @@ export type ConditionKey =
   | "fontScripts"
   | "fontCategories"
   | "fontWeights"
-  | "fontFeatures";
+  | "fontFeatures"
+  | "parents";
 
 /** What clearing each condition sets. */
 export const CLEARED: Record<ConditionKey, { minRating?: 0; tagFilter?: number[]; filter?: Partial<Filter> }> = {
@@ -670,6 +682,7 @@ export const CLEARED: Record<ConditionKey, { minRating?: 0; tagFilter?: number[]
   fontCategories: { filter: { fontCategories: [] } },
   fontWeights: { filter: { fontWeights: [] } },
   fontFeatures: { filter: { fontFeatures: [] } },
+  parents: { filter: { parentsOnly: false, childrenOnly: false, unlinkedOnly: false } },
 };
 
 type QueryState = Pick<
@@ -811,6 +824,7 @@ export const useStore = create<State>((set, get) => ({
   thumbSize: loadNumber("thumbSize", 180),
   inspectorOpen: load("inspectorOpen") !== "false",
   sidebarOpen: load("sidebarOpen") !== "false",
+  tocOpen: false,
   sidebarWidth: clampWidth("sidebar", loadNumber("sidebarWidth", PANEL_WIDTH.sidebar.initial)),
   inspectorWidth: clampWidth("inspector", loadNumber("inspectorWidth", PANEL_WIDTH.inspector.initial)),
   showSubfolders: load("showSubfolders") === "true",
@@ -1002,7 +1016,7 @@ export const useStore = create<State>((set, get) => ({
     saveLibrarySetting("linksTrash", linksTrash === "with" ? null : linksTrash);
   },
   setUsedModes: (modes) => {
-    const used = KINDS.map((k) => k.kind).filter((k) => modes.includes(k));
+    const used = KINDS.map((k) => k.kind).filter((k) => modes.includes(k) && buildHas(k));
     if (!used.length) return;
     set({ librarySettings: { ...get().librarySettings, modes: used } });
     // Every kind = nothing to remember (a kind added later is used too).
@@ -1148,6 +1162,11 @@ export const useStore = create<State>((set, get) => ({
     if (!open.delete(id)) open.add(id);
     set(rearrange(get(), { openParents: open }));
   },
+  setAllParents: (open) => {
+    const here = new Set(get().rawItems.map((i) => i.id));
+    const parents = open ? get().rawItems.flatMap((i) => (i.parentId && here.has(i.parentId) ? [i.parentId] : [])) : [];
+    set(rearrange(get(), { openParents: parents.length ? new Set(parents) : NO_PARENTS }));
+  },
   toggleFamily: (family) => {
     const open = new Set(get().openFamilies);
     if (!open.delete(family)) open.add(family);
@@ -1179,6 +1198,7 @@ export const useStore = create<State>((set, get) => ({
     set({ sidebarOpen });
     persist("sidebarOpen", String(sidebarOpen));
   },
+  setTocOpen: (tocOpen) => set({ tocOpen }),
   setPanelWidth: (panel, px) => {
     const w = clampWidth(panel, px);
     set(panel === "sidebar" ? { sidebarWidth: w } : { inspectorWidth: w });
@@ -1280,6 +1300,8 @@ export const useStore = create<State>((set, get) => ({
   openSettings: (tab) =>
     set((s) => {
       if (tab === null) return { settingsTab: null };
+      // A page this build leaves out (src/lib/limits.ts) opens the first one.
+      if (tab !== "last" && OFF_SETTINGS.has(tab)) tab = "general";
       if (tab !== "last") return { settingsTab: tab, lastSettingsTab: tab };
       const last = s.lastSettingsTab;
       return { settingsTab: last.startsWith("library") && !s.library ? "general" : last };
@@ -1534,7 +1556,8 @@ export function notifyUnusedKinds(kinds: Partial<Record<ItemKind, number>>) {
   const used = usedModes(s);
   for (const { kind: m } of KINDS) {
     const n = kinds[m] ?? 0;
-    if (!n || used.includes(m)) continue;
+    // Kinds this build doesn't handle are never imported (src/lib/limits.ts).
+    if (!n || used.includes(m) || !buildHas(m)) continue;
     s.notify({
       title: `${kindLabel(m)} ${n} 件を取り込みました`,
       detail: "このライブラリでは使っていない種類です",

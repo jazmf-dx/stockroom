@@ -5,7 +5,7 @@
 // values picked are "any of"; the conditions are "all of".
 // An open smart folder shows its own conditions here (locked: "条件を編集"
 // loads them into the row to change them).
-import { Check, ChevronDown, FolderSearch, Search, X } from "lucide-react";
+import { Check, ChevronDown, Ellipsis, FolderSearch, ListFilter, Search, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cancelSmartEdit, createSmartFolder, saveEditedSmartFolder } from "../lib/actions";
@@ -24,6 +24,7 @@ import {
 import { FontConditions } from "../features/fonts/FontFilters";
 import { activeConditions, CLEARED, listIs, listQuery, usedModes, useStore, type ConditionKey } from "../store";
 import { RangeCalendar } from "./RangeCalendar";
+import { Dropdown } from "./ViewMenu";
 import { systemFacetCounts } from "../features/fonts/system";
 
 /**
@@ -128,10 +129,12 @@ export function Pill({
         title={title ?? (on ? `${label}：${value}` : label)}
         aria-expanded={open}
         onClick={() => (locked ? onLocked?.() : setOpen((o) => !o))}
-        className={`flex h-7 items-center gap-1 rounded-full border pr-1.5 pl-3 whitespace-nowrap disabled:opacity-40 ${
+        className={`flex h-7 items-center gap-1 rounded-md border border-transparent pr-1.5 pl-2.5 whitespace-nowrap disabled:off disabled:bg-transparent disabled:shadow-[inset_0_0_0_1px_rgb(255_255_255/0.08)] ${
           on
-            ? "border-accent bg-accent text-white enabled:hover:brightness-110"
-            : `border-line ${open ? "bg-white/8" : ""} enabled:hover:bg-white/5`
+            ? "bg-tonal text-on-tonal enabled:hover:brightness-110"
+            : open
+              ? "bg-press"
+              : "bg-white/8 enabled:hover:bg-white/12"
         } ${locked && on ? "opacity-80" : ""}`}
       >
         <span>{label}</span>
@@ -193,7 +196,7 @@ export function Option({
     >
       <span
         className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center border ${single ? "rounded-full" : "rounded-sm"} ${
-          on ? "border-accent bg-accent text-white" : "border-line"
+          on ? "border-accent bg-accent-fill text-white" : "border-edge"
         }`}
       >
         {on && <Check size={10} strokeWidth={3} />}
@@ -237,7 +240,7 @@ function NumField({
       onKeyDown={(e) => e.key === "Enter" && !composing(e) && commit()}
       inputMode="decimal"
       placeholder={placeholder}
-      className="h-7 w-20 rounded border border-line bg-bg px-1.5 tabular-nums outline-none focus:border-accent"
+      className="h-7 w-20 rounded border border-edge bg-bg px-1.5 tabular-nums outline-none focus:border-accent"
     />
   );
 }
@@ -254,16 +257,20 @@ const nextDay = (ms: number) => {
 /** The conditions of a smart folder's rule, as the row shows them. */
 const condOf = (r: Rule): Cond => ({ tagFilter: r.tagIds, tagMatchAll: r.tagMatchAll, minRating: r.minRating, filter: r.filter });
 
-export function FilterRow() {
+/**
+ * One band holding every control over the list: the conditions on the left,
+ * then this view's own controls, the band's own actions, and how the list
+ * looks at the right end (docs/NAVIGATION.md). Short of room it folds a step
+ * at a time rather than growing; the conditions scroll sideways and keep the
+ * first one in the same place whatever the view (docs/UI.md).
+ */
+export function FilterRow({ viewControls, display }: { viewControls?: React.ReactNode; display?: React.ReactNode }) {
   const mode = useStore((s) => s.mode);
-  const view = useStore((s) => s.view);
   const smart = useStore((s) => (s.view.kind === "smart" ? s.smartFolders.find((f) => f.id === (s.view as { id: string }).id) : undefined));
   const editing = useStore((s) => s.editingSmart);
   const own = useStore(
     useShallow((s): Cond => ({ tagFilter: s.tagFilter, tagMatchAll: s.tagMatchAll, minRating: s.minRating, filter: s.filter })),
   );
-  const active = useStore(activeConditions);
-  const clearConditions = useStore((s) => s.clearConditions);
   const startEditSmart = useStore((s) => s.startEditSmart);
   // An open smart folder shows its rule, locked.
   const locked = !!smart && !editing;
@@ -272,10 +279,20 @@ export function FilterRow() {
   const common = { cond, locked, onLocked: edit };
 
   return (
-    // One row whatever is picked: the conditions scroll sideways when short of
-    // room, the row's own actions stay at its right end (docs/UI.md).
-    <div data-filter-row className="flex h-7 items-center gap-3 text-xs">
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    // Sunk one step from the rest of the toolbar (docs/UI.md「色」): this band is
+    // where the list is narrowed and where its look is set. One line down to
+    // @xl; below that the display controls take a line of their own, which is
+    // where the title and the search box already stack.
+    <div
+      data-filter-row
+      className="-mx-4 flex min-h-10 flex-nowrap items-center gap-x-3 gap-y-1.5 bg-black/18 px-4 py-1.5 text-xs @max-xl:flex-wrap"
+    >
+      <span className="flex shrink-0 items-center gap-1.5 text-dim @max-7xl:hidden">
+        <ListFilter size={13} /> 絞り込み
+      </span>
+      {/* Keeps room for a couple of conditions whatever else is on the band,
+          so they never collapse to nothing (docs/UI.md). */}
+      <div className="flex min-w-[8rem] flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {locked && smart.rule.search.trim() && (
         <Pill label="検索" value={smart.rule.search.trim()} locked onLocked={edit} onClear={() => {}}>
           {() => null}
@@ -290,6 +307,7 @@ export function FilterRow() {
           <DimsCondition {...common} />
           <DateCondition {...common} />
           <SizeCondition {...common} />
+          <LinksCondition {...common} />
         </>
       ) : (
         <>
@@ -299,13 +317,16 @@ export function FilterRow() {
         </>
       )}
       </div>
-      {/* The row's own actions, at its right end and always there (greyed out with nothing to do). */}
+      {/* This view's own controls, right of the conditions so that nothing
+          further right moves when the view changes (docs/UI.md). */}
+      {viewControls}
+      {/* The band's own actions, always there (greyed out with nothing to do). */}
       <div className="flex shrink-0 items-center gap-1.5">
         {locked ? (
           <button
             onClick={edit}
             title={`スマートフォルダ「${smart.name}」の条件を絞り込みの行に読み込んで変える`}
-            className="flex h-7 items-center gap-1.5 rounded-md border border-line px-2 hover:bg-white/5"
+            className="flex h-7 items-center gap-1.5 rounded-md px-2 ghost"
           >
             <FolderSearch size={13} className="text-accent" /> 条件を編集
           </button>
@@ -319,39 +340,72 @@ export function FilterRow() {
             </button>
             <button
               onClick={() => saveEditedSmartFolder()}
-              className="h-7 rounded-md bg-accent px-2.5 font-medium text-white hover:brightness-110"
+              className="h-7 rounded-md bg-accent-fill px-2.5 font-medium text-white hover:brightness-110"
             >
               保存
             </button>
           </>
         ) : (
-          <>
-            <button
-              disabled={active === 0}
-              onClick={clearConditions}
-              title="絞り込みの条件と検索をすべて外す"
-              className="h-7 rounded-md px-2 text-dim enabled:hover:bg-white/5 enabled:hover:text-fg disabled:opacity-40"
-            >
-              すべて解除
-            </button>
-            <button
-              disabled={active === 0 || view.kind === "system"}
-              onClick={() => createSmartFolder()}
-              title={
-                view.kind === "system"
-                  ? "スマートフォルダはライブラリのフォントだけを集めます（この端末のフォントの条件は保存できません）"
-                  : view.kind === "tag"
-                  ? "今の条件（このタグも）をスマートフォルダとして保存（⌘⇧⌥N）"
-                  : "今の検索と絞り込みの条件をスマートフォルダとして保存（⌘⇧⌥N）"
-              }
-              className="flex h-7 items-center gap-1.5 rounded-md border border-line px-2 enabled:hover:bg-white/5 disabled:opacity-40"
-            >
-              <FolderSearch size={13} /> 条件を保存
-            </button>
-          </>
+          <ConditionActions />
         )}
       </div>
+      {/* How the list looks, at the right end of the band. */}
+      {display && (
+        <div className="flex shrink-0 items-center gap-2 @max-xl:w-full @max-xl:justify-end">{display}</div>
+      )}
     </div>
+  );
+}
+
+/**
+ * Clear the conditions, or keep them as a smart folder. Side by side while
+ * there is room; below @6xl the two fold into one ⋯ button in the same place
+ * (docs/UI.md). Kept (greyed out) with nothing to clear, so nothing moves.
+ */
+function ConditionActions() {
+  const view = useStore((s) => s.view);
+  const active = useStore(activeConditions);
+  const clearConditions = useStore((s) => s.clearConditions);
+  const none = active === 0;
+  const noSave = none || view.kind === "system";
+  const saveTitle =
+    view.kind === "system"
+      ? "スマートフォルダはライブラリのフォントだけを集めます（この端末のフォントの条件は保存できません）"
+      : view.kind === "tag"
+        ? "今の条件（このタグも）をスマートフォルダとして保存（⌘⇧⌥N）"
+        : "今の検索と絞り込みの条件をスマートフォルダとして保存（⌘⇧⌥N）";
+  return (
+    <>
+      <div className={`flex items-center gap-1.5 @max-6xl:hidden ${none ? "invisible" : ""}`}>
+        <button disabled={none} onClick={clearConditions} title="絞り込みの条件と検索をすべて外す" className="h-7 rounded-md px-2 ghost disabled:off">
+          すべて解除
+        </button>
+        <button
+          disabled={noSave}
+          onClick={() => createSmartFolder()}
+          title={saveTitle}
+          className="flex h-7 items-center gap-1.5 rounded-md px-2 ghost disabled:off"
+        >
+          <FolderSearch size={13} /> 条件を保存
+        </button>
+      </div>
+      <div className={`hidden @max-6xl:block ${none ? "invisible" : ""}`}>
+        <Dropdown title="絞り込みの条件の操作" width="w-48" button={<Ellipsis size={15} />}>
+          <button data-close disabled={none} onClick={clearConditions} className="flex w-full rounded px-2 py-1.5 text-left hover:bg-white/8 disabled:off">
+            すべて解除
+          </button>
+          <button
+            data-close
+            disabled={noSave}
+            onClick={() => createSmartFolder()}
+            title={saveTitle}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-white/8 disabled:off"
+          >
+            <FolderSearch size={13} /> 条件を保存
+          </button>
+        </Dropdown>
+      </div>
+    </>
   );
 }
 
@@ -445,7 +499,7 @@ function TagMenu({ open, picked, toggle }: { open: boolean; picked: number[]; to
   return (
     <>
       {tags.length > 8 && (
-        <label className="mb-1 flex h-7 items-center gap-1.5 rounded border border-line bg-bg px-2 focus-within:border-accent">
+        <label className="mb-1 flex h-7 items-center gap-1.5 rounded border border-edge bg-bg px-2 focus-within:border-accent">
           <Search size={12} className="text-dim" />
           <input
             autoFocus
@@ -465,17 +519,17 @@ function TagMenu({ open, picked, toggle }: { open: boolean; picked: number[]; to
       {shown.length === 0 && <p className={menuNote}>当てはまるタグはありません</p>}
       <div className="mt-1 flex items-center gap-2 border-t border-line px-2 pt-2 pb-1">
         <span className="text-dim">複数選んだとき</span>
-        <div className="flex overflow-hidden rounded-md border border-line">
+        <div className="flex rounded-md track">
           {[
             { all: false, label: "いずれか" },
             { all: true, label: "すべて" },
-          ].map((m, i) => (
+          ].map((m) => (
             <button
               key={m.label}
               aria-pressed={matchAll === m.all}
               onClick={() => setMatchAll(m.all)}
-              className={`px-2 py-0.5 ${i > 0 ? "border-l border-line" : ""} ${
-                matchAll === m.all ? "bg-accent text-white" : "text-dim hover:bg-white/5"
+              className={`rounded px-2 py-0.5 ${
+                matchAll === m.all ? "thumb" : "text-fg/85 hover:bg-hover hover:text-fg"
               }`}
             >
               {m.label}
@@ -519,6 +573,56 @@ function KindMenu({ open, kinds, picked, pick }: { open: boolean; kinds: ItemKin
       {kinds.map((k) => (
         <Option key={k} on={picked.includes(k)} count={facets ? (facets.kinds[k] ?? 0) : null} onClick={() => pick(toggled(picked, k))}>
           {kindLabel(k)}
+        </Option>
+      ))}
+    </>
+  );
+}
+
+type LinkRole = "parent" | "child" | "none";
+const LINK_ROLES: { role: LinkRole; label: string; filter: Partial<Filter> }[] = [
+  { role: "parent", label: "子を持つもの（親）", filter: { parentsOnly: true, childrenOnly: false, unlinkedOnly: false } },
+  { role: "child", label: "子（親に紐づいている）", filter: { parentsOnly: false, childrenOnly: true, unlinkedOnly: false } },
+  { role: "none", label: "紐づけなし", filter: { parentsOnly: false, childrenOnly: false, unlinkedOnly: true } },
+];
+const linkRole = (f: Filter): LinkRole | null => (f.parentsOnly ? "parent" : f.childrenOnly ? "child" : f.unlinkedOnly ? "none" : null);
+
+/**
+ * How items are linked (docs/LINKS.md): parents, children, or not linked. Last in the row,
+ * so the others stay put whether the library uses links or not; with links off it's
+ * there only to be cleared.
+ */
+function LinksCondition({ cond, locked, onLocked }: CondProps) {
+  const links = useStore((s) => s.librarySettings.links);
+  const setFilter = useStore((s) => s.setFilter);
+  const role = linkRole(cond.filter);
+  const notForSystem = useNotForSystem("親子の紐づけ");
+  if (!links && !role) return null;
+  return (
+    <Pill
+      {...notForSystem}
+      label="紐づけ"
+      value={LINK_ROLES.find((r) => r.role === role)?.label.replace(/（.*）/, "") ?? ""}
+      locked={locked}
+      onLocked={onLocked}
+      onClear={() => setFilter(CLEARED.parents.filter!)}
+      width="w-56"
+    >
+      {(open, close) => (
+        <LinksMenu open={open} role={role} pick={(r) => (setFilter(r ? LINK_ROLES.find((x) => x.role === r)!.filter : CLEARED.parents.filter!), close())} />
+      )}
+    </Pill>
+  );
+}
+
+function LinksMenu({ open, role, pick }: { open: boolean; role: LinkRole | null; pick: (r: LinkRole | null) => void }) {
+  const facets = useFacets("parents", open);
+  const count = (r: LinkRole) => (facets ? { parent: facets.parents, child: facets.children, none: facets.unlinked }[r] : null);
+  return (
+    <>
+      {LINK_ROLES.map(({ role: r, label }) => (
+        <Option key={r} single on={role === r} count={count(r)} onClick={() => pick(role === r ? null : r)}>
+          {label}
         </Option>
       ))}
     </>
@@ -622,7 +726,8 @@ function DateCondition({ cond, locked, onLocked }: CondProps) {
       locked={locked}
       onLocked={onLocked}
       onClear={() => setFilter(CLEARED.date.filter!)}
-      width="w-72"
+      // The calendar fills the menu: just wide enough for 7 square-ish days.
+      width="w-64"
     >
       {(_, close) => (
         <div className="flex flex-col gap-0.5">

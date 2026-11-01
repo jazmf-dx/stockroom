@@ -34,7 +34,7 @@ import {
   type Placement,
 } from "../lib/layouts";
 import { activeConditions, currentFolderId, listKinds, useStore, type ShowInfo } from "../store";
-import { comboText } from "../lib/shortcuts";
+import { comboText, isMac } from "../lib/shortcuts";
 import { ChangePulse } from "./ActionHud";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
@@ -93,6 +93,24 @@ function Thumb({ item, fit }: { item: Item; fit: "cover" | "contain" }) {
   );
 }
 
+/** Frames behind a parent's thumbnail, as many as it has children (up to 2): a stack reads as "has more". */
+function StackFrames({ item, width, height }: { item: Item; width: number; height: number }) {
+  const n = Math.min(item.childIds?.length ?? 0, 2);
+  if (item.childMember || !n) return null;
+  return (
+    <>
+      {Array.from({ length: n }, (_, k) => (
+        <div
+          key={k}
+          aria-hidden
+          className="pointer-events-none absolute rounded-lg border border-white/15 bg-raised"
+          style={{ width, height, top: (n - k) * 4, left: (n - k) * 4, opacity: 0.9 - k * 0.2 }}
+        />
+      ))}
+    </>
+  );
+}
+
 /**
  * A parent's "＋3" with ▸ / ▾ to open its children under it (links on, docs/LINKS.md);
  * "中に該当あり" when the parent is in the list only because children of it match.
@@ -122,22 +140,24 @@ function LinkMark({ item, inline = false }: { item: Item; inline?: boolean }) {
   const n = item.childIds?.length ?? 0;
   if (!n) return null;
   const Chevron = open ? ChevronDown : ChevronRight;
-  const label = item.viaChild ? "中に該当あり" : `＋${n}`;
-  const title = `${open ? "紐づけた項目を閉じる" : "紐づけた項目を開く"}（${n} 件${item.viaChild ? "。この親自体は条件に合いません" : ""}）`;
+  const label = item.viaChild ? "中に該当あり" : `親 ${n}`;
+  const title = `${open ? "紐づけた項目を閉じる" : "紐づけた項目を開く"}（${n} 件${item.viaChild ? "。この親自体は条件に合いません" : ""}。${isMac ? "⌥" : "Alt"}+クリックですべて）`;
   return (
     <button
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
-      onClick={() => useStore.getState().toggleParent(item.id)}
+      // ⌥-click: every parent of the list, as in Finder.
+      onClick={(e) => (e.altKey ? useStore.getState().setAllParents(!open) : useStore.getState().toggleParent(item.id))}
       title={title}
-      className={`flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] leading-none tabular-nums ${
-        inline
-          ? "mr-1.5 inline-flex shrink-0 bg-white/10 align-middle text-dim hover:bg-white/20"
-          : "absolute bottom-1.5 left-1.5 max-w-[calc(100%-2.75rem)] bg-black/60 text-white hover:bg-black/80"
+      // A parent: the accent face, the stack icon and the word, so it reads as one at a glance.
+      // At the bottom left, clear of the selection check at the right.
+      className={`flex items-center gap-1 rounded-full bg-accent-fill px-1.5 py-0.5 text-[11px] leading-none text-white tabular-nums hover:brightness-110 ${
+        inline ? "mr-1.5 inline-flex shrink-0 align-middle" : "absolute bottom-1.5 left-1.5 max-w-[calc(100%-2.75rem)]"
       }`}
     >
-      <Chevron size={11} strokeWidth={2.5} className="shrink-0" />
+      <Layers size={11} className="shrink-0" />
       <span className="truncate">{label}</span>
+      <Chevron size={11} strokeWidth={2.5} className="shrink-0" />
     </button>
   );
 }
@@ -204,7 +224,7 @@ function FlagOverlay({ item }: { item: Item }) {
       {(item.pinnedAt !== null || trayMark) && (
         <span className="pointer-events-none absolute top-1.5 left-1.5 flex gap-1">
           {item.pinnedAt !== null && (
-            <span title="ピン留め中（一覧の先頭に表示）" className="pointer-events-auto rounded-full bg-accent p-1 text-white shadow">
+            <span title="ピン留め中（一覧の先頭に表示）" className="pointer-events-auto rounded-full bg-accent-fill p-1 text-white shadow">
               <Pin size={11} fill="currentColor" strokeWidth={2} />
             </span>
           )}
@@ -234,7 +254,7 @@ function SelectMark({ item, index, selected }: { item: Item; index: number; sele
       }}
       title={selected ? "選択から外す（⌘+クリック）" : "選択に追加（⌘+クリック）"}
       className={`absolute right-1.5 bottom-1.5 h-5 w-5 items-center justify-center rounded-full border-2 border-white transition-colors ${
-        selected ? "flex bg-accent text-white shadow" : "hidden bg-black/35 group-hover:flex hover:bg-black/60"
+        selected ? "flex bg-accent-fill text-white shadow" : "hidden bg-black/35 group-hover:flex hover:bg-black/60"
       }`}
     >
       {selected && <Check size={12} strokeWidth={3.5} />}
@@ -310,6 +330,7 @@ const Cell = memo(function Cell({
       data-drop={reorderable ? `item:${item.id}` : undefined}
       data-link={link}
     >
+      <StackFrames item={item} width={width} height={height} />
       <div
         className={`relative flex items-center justify-center overflow-hidden rounded-lg bg-raised transition-shadow duration-150 ${
           selected ? "sel-ring" : focused ? "" : "hover:ring-2 hover:ring-white/15"
@@ -429,7 +450,7 @@ const ListRow = memo(function ListRow({
           <button
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => useStore.getState().pickKeeper(item.id)}
-            className="ml-2 rounded border border-line px-1.5 py-0.5 text-[10px] hover:bg-white/10"
+            className="ml-2 rounded px-1.5 py-0.5 text-[10px] ghost"
           >
             これを残す
           </button>
@@ -536,13 +557,29 @@ export function showItemMenu(e: React.MouseEvent | { clientX: number; clientY: n
       ],
     },
     { label: "タグ", submenu: [commandItem("item.copyTags"), commandItem("item.pasteTags")] },
+    // A video, or a video and an image (docs/VIDEO.md).
+    ...(ids.some((id) => byId.get(id)?.kind === "video")
+      ? [
+          {
+            label: "サムネイル",
+            submenu: [
+              commandItem("item.thumbFile"),
+              commandItem("item.thumbClipboard"),
+              commandItem("item.thumbSelected"),
+              commandItem("item.thumbAdopted"),
+              { separator: true as const },
+              commandItem("item.thumbReset"),
+            ],
+          },
+        ]
+      : []),
     // Stock only; with links off the rows stay, greyed, and say why (docs/UI.md).
     ...(s.mode === "stock"
       ? [
           {
             label: "紐づけ",
             submenu: s.librarySettings.links
-              ? [commandItem("item.link"), commandItem("item.unlink"), commandItem("item.adopt")]
+              ? [commandItem("item.link"), commandItem("item.unlink"), commandItem("item.makeParent"), commandItem("item.adopt")]
               : [{ label: "親子関係が無効です（設定で有効にできます）", onClick: () => {}, disabled: true }],
           },
         ]
@@ -794,7 +831,16 @@ export function Grid() {
   }, []);
 
   const Comp = kind === "list" ? ListRow : kind === "specimen" ? SpecimenRow : fontTiles ? FontTile : Cell;
+  // The section being read: the last one whose band has reached the top.
+  const current = Math.max(0, placement.headers.filter((h) => h.y - PAD <= viewport.top + 4).length - 1);
+  const jump = (n: number) => {
+    const h = placement.headers[n];
+    if (h) scrollRef.current?.scrollTo({ top: Math.max(0, h.y - PAD) });
+    useStore.getState().setTocOpen(false);
+  };
   return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      {items.length > 0 && <SectionBar items={items} sections={sections} current={current} onJump={jump} />}
     <div
       ref={scrollRef}
       className="@container relative min-h-0 flex-1 overflow-y-auto"
@@ -867,6 +913,113 @@ export function Grid() {
         </div>
       )}
     </div>
+    </div>
+  );
+}
+
+/**
+ * Above the list, outside its scrolling: the section being read, and the
+ * table of contents to jump to any other. One row whether or not the list is
+ * in sections, so nothing below moves (docs/UI.md, docs/GROUP_TOC.md).
+ */
+function SectionBar({
+  items,
+  sections,
+  current,
+  onJump,
+}: {
+  items: Item[];
+  sections: Section[];
+  current: number;
+  onJump: (n: number) => void;
+}) {
+  const open = useStore((s) => s.tocOpen);
+  const setOpen = useStore((s) => s.setTocOpen);
+  const grouped = sections.length > 0;
+  const unit = (list: Item[]) =>
+    list.every((i) => i.kind === "image") ? "枚" : "件";
+  const count = (s: Section) =>
+    `${s.end - s.start} ${unit(items.slice(s.start, s.end))}`;
+  const here = grouped
+    ? sections[Math.min(current, sections.length - 1)]
+    : null;
+  const menu = useRef<HTMLDivElement>(null);
+
+  // Closes on a click elsewhere or Esc; the list keeps its keys meanwhile.
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (
+        e instanceof KeyboardEvent
+          ? e.key === "Escape"
+          : !menu.current?.contains(e.target as Node)
+      )
+        setOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [open, setOpen]);
+  // The sections went away (grouping switched off): nothing to show open.
+  useEffect(() => {
+    if (!grouped && open) setOpen(false);
+  }, [grouped, open, setOpen]);
+
+  return (
+    <div
+      ref={menu}
+      className="relative z-10 flex h-8 shrink-0 items-center gap-2 border-b border-line px-4 text-xs"
+    >
+      <span className="truncate font-semibold">{here?.title ?? "すべて"}</span>
+      <span className="shrink-0 tabular-nums text-dim">
+        {here ? count(here) : `${items.length} ${unit(items)}`}
+      </span>
+      <button
+        disabled={!grouped}
+        title={
+          grouped ? "グループの目次（⌘⌥J）" : "グループ分けを選ぶと使えます"
+        }
+        onClick={() => setOpen(!open)}
+        className="ml-auto flex min-w-20 items-center justify-center gap-1 rounded-md px-2 py-0.5 ghost disabled:off"
+      >
+        目次 <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div
+          data-modal
+          className="absolute right-4 top-8 max-h-80 w-60 overflow-y-auto rounded-lg border border-line bg-panel p-1 shadow-xl"
+        >
+          {sections.map((s, n) => {
+            const hex = colorHex(s.color);
+            return (
+              <button
+                key={`${s.start}:${n}`}
+                onClick={() => onJump(n)}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left hover:bg-white/10 ${n === current ? "bg-white/10 font-semibold" : ""}`}
+              >
+                {hex && (
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ background: hex }}
+                  />
+                )}
+                {s.rating ? (
+                  <Stars n={s.rating} size={12} />
+                ) : (
+                  <span className="truncate">{s.title}</span>
+                )}
+                <span className="ml-auto shrink-0 tabular-nums text-dim">
+                  {count(s)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -913,7 +1066,7 @@ function GroupHeader({ items, section, keepPick }: { items: Item[]; section: Sec
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => dismissDuplicates(group.map((i) => i.id))}
         title="このグループの画像は別物として扱い、今後は候補に出しません"
-        className="ml-auto rounded-md border border-line px-2 py-0.5 hover:bg-white/5"
+        className="ml-auto rounded-md px-2 py-0.5 ghost"
       >
         重複ではない
       </button>
@@ -921,7 +1074,7 @@ function GroupHeader({ items, section, keepPick }: { items: Item[]; section: Sec
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => reviewDuplicates(keepPlan([group], keepPick))}
         title="残す1枚を確認してから、他をゴミ箱へ移動します"
-        className="rounded-md border border-line px-2 py-0.5 hover:bg-white/5"
+        className="rounded-md px-2 py-0.5 ghost"
       >
         このグループを整理…
       </button>
@@ -956,7 +1109,7 @@ function Empty({
         <p>条件に合う{noun}はありません</p>
         <button
           onClick={() => useStore.getState().clearConditions()}
-          className="rounded-md bg-accent px-3 py-1.5 font-medium text-white hover:brightness-110"
+          className="rounded-md bg-accent-fill px-3 py-1.5 font-medium text-white hover:brightness-110"
         >
           絞り込みをすべて解除
         </button>
@@ -1013,7 +1166,7 @@ function Empty({
       <button
         onPointerDown={(e) => e.stopPropagation()}
         onClick={importFilesDialog}
-        className="rounded-md bg-accent px-4 py-1.5 font-medium text-white hover:brightness-110"
+        className="rounded-md bg-accent-fill px-4 py-1.5 font-medium text-white hover:brightness-110"
       >
         {noun}を選択して追加
       </button>

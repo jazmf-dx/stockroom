@@ -7,11 +7,13 @@
  * Keys are written like "Mod+Shift+R": Mod is ⌘ on macOS and Ctrl elsewhere.
  * The first key is the one menus show.
  */
+import { OFF_COMMANDS } from "./limits";
 import {
   Copy,
   FlipHorizontal2,
   FlipVertical2,
   FolderInput,
+  ImagePlus,
   Heart,
   Layers,
   Pin,
@@ -30,8 +32,14 @@ import {
   deleteSelection,
   exportLibrary,
   exportList,
+  importFilesDialog,
+  importFolderDialog,
   moveToLastFolder,
   linkedIn,
+  makeParent,
+  pickVideoThumb,
+  resetVideoThumb,
+  setVideoThumb,
   toggleAdopted,
   unlinkItems,
   onShelf,
@@ -54,8 +62,8 @@ import {
 import { api, isSystemId, kindLabel, type Item, type ItemKind } from "./api";
 import { fontApi } from "../features/fonts/api";
 import { checkForUpdate, openReleaseNotes } from "./update";
-import { COMPARE_ZOOM, currentFolderId, listKinds, MODES, shelfShown, shownModes, useStore, zoomLook } from "../store";
-import { modeLabel } from "./modes";
+import { COMPARE_ZOOM, currentFolderId, listKinds, MODES, shelfShown, shownKinds, shownModes, useStore, zoomLook } from "../store";
+import { kindsNoun, modeLabel } from "./modes";
 import { rowIds } from "./grouping";
 import { useShortcutHelp } from "../components/ShortcutHelp";
 import { createText } from "../features/texts/actions";
@@ -115,6 +123,19 @@ const onlyChildren = (s: S) => {
   const picked = new Set(sel(s));
   return xs.length > 0 && xs.every((i) => i.parentId && !picked.has(i.parentId));
 };
+/** The one video selected, to give a thumbnail (docs/VIDEO.md). */
+const oneVideo = (s: S): Item | undefined => {
+  const xs = selItems(s);
+  return live(s) && xs.length === 1 && xs[0].kind === "video" ? xs[0] : undefined;
+};
+/** A video and an image selected: the image can be the video's thumbnail. */
+const videoAndImage = (s: S): [Item, Item] | undefined => {
+  const xs = selItems(s);
+  if (!live(s) || xs.length !== 2) return undefined;
+  const v = xs.find((i) => i.kind === "video");
+  const img = xs.find((i) => i.kind === "image");
+  return v && img ? [v, img] : undefined;
+};
 const lastFolder = (s: S) => s.folders.find((f) => f.id === s.recentFolders[0]);
 
 /**
@@ -130,7 +151,7 @@ function zoom(s: S, dir: 1 | -1) {
   else s.setThumbSize(Math.min(360, Math.max(80, s.thumbSize + 20 * dir)));
 }
 
-export const COMMANDS: Command[] = [
+const ALL_COMMANDS: Command[] = [
   // ---------------------------------------------------------------- app
   {
     id: "app.settings",
@@ -156,6 +177,22 @@ export const COMMANDS: Command[] = [
   { id: "help.log", title: "ログを表示", run: (s) => s.run(() => api.revealLog()) },
 
   // ------------------------------------------------------------ library
+  // Adding is mostly done by dropping onto the window; these are the menu's way in.
+  {
+    id: "list.import",
+    title: "追加…",
+    icon: ImagePlus,
+    label: (s) => `${kindsNoun(shownKinds(s))}を追加…`,
+    enabled: library,
+    run: () => void importFilesDialog(),
+  },
+  {
+    id: "list.importFolder",
+    title: "フォルダから追加…",
+    icon: FolderInput,
+    enabled: library,
+    run: () => void importFolderDialog(),
+  },
   { id: "library.new", title: "新しいライブラリ…", run: () => void createLibraryDialog() },
   { id: "library.open", title: "ライブラリを開く…", run: () => void openLibraryDialog() },
   {
@@ -211,6 +248,15 @@ export const COMMANDS: Command[] = [
     run: (s) => s.togglePanelTab("shelf"),
   },
   {
+    id: "view.toc",
+    title: "グループの目次",
+    keys: ["Mod+Alt+J"],
+    // Only where the list is in sections (docs/UI.md: greyed out, not removed).
+    enabled: (s) => s.sections.length > 0,
+    checked: (s) => s.tocOpen,
+    run: (s) => s.setTocOpen(!s.tocOpen),
+  },
+  {
     id: "view.zoomIn",
     title: "拡大",
     label: (s) => (s.mode === "font" && s.layout === "specimen" ? "文字を大きく" : "拡大"),
@@ -229,6 +275,19 @@ export const COMMANDS: Command[] = [
     title: "サブフォルダの内容を表示",
     checked: (s) => s.showSubfolders,
     run: (s) => s.setShowSubfolders(!s.showSubfolders),
+  },
+  // Parents' rows (docs/LINKS.md): their children open under them.
+  {
+    id: "view.openParents",
+    title: "紐づけた項目をすべて開く",
+    enabled: (s) => linksOn(s) && s.rawItems.some((i) => i.parentId) && s.items.some((i) => i.childIds && !s.openParents.has(i.id)),
+    run: (s) => s.setAllParents(true),
+  },
+  {
+    id: "view.closeParents",
+    title: "紐づけた項目をすべて閉じる",
+    enabled: (s) => linksOn(s) && s.openParents.size > 0,
+    run: (s) => s.setAllParents(false),
   },
   { id: "go.folder", title: "フォルダへ…", keys: ["Mod+J"], run: (s) => s.setPicker("goto") },
 
@@ -484,6 +543,13 @@ export const COMMANDS: Command[] = [
     run: (s) => void unlinkItems(sel(s)),
   },
   {
+    id: "item.makeParent",
+    title: "親にする",
+    // A child: it and its parent change places (the other children go under it too).
+    enabled: (s) => live(s) && linksOn(s) && sel(s).length === 1 && !!selItems(s)[0]?.parentId,
+    run: (s) => void makeParent(sel(s)[0]),
+  },
+  {
     id: "item.adopt",
     title: "採用にする",
     label: (s) => (selItems(s)[0]?.adopted ? "採用を外す" : "採用にする"),
@@ -491,6 +557,43 @@ export const COMMANDS: Command[] = [
     enabled: (s) => live(s) && linksOn(s) && sel(s).length === 1 && !!selItems(s)[0]?.parentId,
     checked: (s) => !!selItems(s)[0]?.adopted,
     run: (s) => void toggleAdopted(sel(s)[0]),
+  },
+  // A video's own thumbnail (docs/VIDEO.md).
+  {
+    id: "item.thumbFile",
+    title: "画像ファイルをサムネイルに…",
+    enabled: (s) => !!oneVideo(s),
+    run: (s) => void pickVideoThumb(oneVideo(s)!.id),
+  },
+  {
+    id: "item.thumbClipboard",
+    title: "クリップボードの画像をサムネイルに",
+    enabled: (s) => !!oneVideo(s),
+    run: (s) => void setVideoThumb(oneVideo(s)!.id, { from: "clipboard" }),
+  },
+  {
+    id: "item.thumbSelected",
+    title: "選んだ画像を動画のサムネイルに",
+    enabled: (s) => !!videoAndImage(s),
+    run: (s) => {
+      const [v, img] = videoAndImage(s)!;
+      void setVideoThumb(v.id, { from: "item", id: img.id });
+    },
+  },
+  {
+    id: "item.thumbAdopted",
+    title: "採用した子をサムネイルに",
+    enabled: (s) => {
+      const v = oneVideo(s);
+      return !!v && linksOn(s) && s.rawItems.some((i) => i.parentId === v.id && i.adopted);
+    },
+    run: (s) => void setVideoThumb(oneVideo(s)!.id, { from: "adopted" }),
+  },
+  {
+    id: "item.thumbReset",
+    title: "サムネイルを動画のコマに戻す",
+    enabled: (s) => !!oneVideo(s)?.ownThumb,
+    run: (s) => void resetVideoThumb(oneVideo(s)!.id),
   },
   { id: "folder.new", title: "新しいフォルダ", keys: ["Mod+Shift+N"], run: () => void createFolderHere() },
   {
@@ -526,6 +629,9 @@ export const COMMANDS: Command[] = [
     }),
   ),
 ];
+
+/** The commands of this build: one with fewer features leaves some out (src/lib/limits.ts). */
+export const COMMANDS: Command[] = ALL_COMMANDS.filter((c) => !OFF_COMMANDS.has(c.id));
 
 const byId = new Map(COMMANDS.map((c) => [c.id, c]));
 

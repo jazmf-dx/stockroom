@@ -1,9 +1,26 @@
 // Dev-only in-memory stand-in for the Rust backend, used when the UI is
-// opened in a normal browser (`npm run dev`) instead of inside Tauri.
+// opened in a normal browser (`bun run dev`) instead of inside Tauri.
 // Mirrors the semantics of src-tauri/src/db.rs closely enough for UI work.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import { modeOf, type Folder, type Item, type ItemQuery, type Mode, type Rule, type SimilarLevel, type Tag } from "../lib/api";
+import { modeOf, type Folder, type Item, type ItemKind, type ItemQuery, type Mode, type Rule, type SimilarLevel, type Tag } from "../lib/api";
 import type { SystemFont } from "../features/fonts/api";
+import { buildHas, NO_CONNECT } from "../lib/limits";
+
+/** The file types of each kind (src-tauri/src/formats.rs `SUPPORTED_EXTS`). */
+const KIND_EXTS: [ItemKind, string[]][] = [
+  ["image", ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif"]],
+  ["font", ["ttf", "otf", "woff", "woff2", "ttc", "otc"]],
+  ["file", ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key"]],
+  ["text", ["md", "markdown", "txt", "csv", "tsv"]],
+  ["video", ["mp4", "m4v", "mov", "webm"]],
+];
+
+/** Commands a build with fewer features refuses (src-tauri/src/limits.rs). */
+const LEFT_OUT = new Set([
+  ...(NO_CONNECT ? ["set_web_import", "reset_web_import_token", "install_extension", "set_mcp", "reset_mcp_token"] : []),
+  ...(buildHas("text") ? [] : ["create_text"]),
+  ...(buildHas("bookmark") ? [] : ["create_bookmark"]),
+]);
 
 type MockItem = Omit<
   Item,
@@ -25,8 +42,11 @@ type MockItem = Omit<
   | "inTray"
   | "parentId"
   | "adopted"
+  | "ownThumb"
 > & {
   hue: number;
+  /** A video's own thumbnail (a data URL), set from another item or a stand-in (videos/thumb.rs). */
+  customThumb?: string;
   /** The parent of a linked child (docs/LINKS.md). */
   parentId?: string | null;
   adopted?: boolean;
@@ -337,6 +357,11 @@ function seed() {
   );
   items.slice(0, 30).forEach((it) => link(it.id, animals.id));
   items.slice(30, 36).forEach((it) => link(it.id, folders[1].id));
+  // Linked files (docs/LINKS.md), so the 紐づけ UI can be tried in the browser mock.
+  librarySettings.links = true;
+  for (const [p, n] of [[0, 3], [5, 2], [10, 4], [18, 1]] as const) {
+    items.slice(p + 1, p + 1 + n).forEach((c) => (c.parentId = items[p].id));
+  }
   addTags(items.slice(0, 40).map((i) => i.id), ["参考"]);
   addTags(items.slice(20, 60).map((i) => i.id), ["ブルー", "背景"]);
   // Fonts have folders and tags of their own (docs/MODES.md); "参考" is both modes'.
@@ -505,7 +530,8 @@ const view = (it: MockItem): Item => {
   const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
   const tagIds = tags.filter((t) => hasTag(it.id, t.id)).map((t) => t.id);
   const thumbPath =
-    it.kind === "font"
+    it.customThumb ??
+    (it.kind === "font"
       ? fontSvg(it)
       : it.kind === "file"
         ? fileSvg(it)
@@ -515,7 +541,7 @@ const view = (it: MockItem): Item => {
             ? videoSvg(it)
             : it.kind === "bookmark"
               ? bookmarkSvg(it)
-              : svg(it, 3, true);
+              : svg(it, 3, true));
   return {
     ...it,
     sourceUrl: it.sourceUrl ?? null,
@@ -536,6 +562,7 @@ const view = (it: MockItem): Item => {
     filePath,
     displayPath: filePath,
     thumbPath,
+    ownThumb: !!it.customThumb,
   };
 };
 const inFolder = (i: string, f: string) => itemFolders.has(`${i}|${f}`);
@@ -600,6 +627,15 @@ function applyRule(r: MockItem[], rule: Rule): MockItem[] {
   // Shape and pixel size only apply to images (fonts are 0 × 0), as in db.rs.
   const sized = f.shapes.length || [f.minWidth, f.maxWidth, f.minHeight, f.maxHeight].some((v) => v != null);
   if (sized) r = r.filter((i) => i.kind === "image");
+  // The live children of live parents stay, to go under their rows.
+  if (f.parentsOnly)
+    r = r.filter(
+      (i) =>
+        hasChildren(i) ||
+        (i.deletedAt === null && items.some((p) => p.id === i.parentId && p.deletedAt === null)),
+    );
+  if (f.childrenOnly) r = r.filter((i) => !!i.parentId);
+  if (f.unlinkedOnly) r = r.filter((i) => !i.parentId && !hasChildren(i));
   if (f.shapes.length) {
     r = r.filter((i) =>
       f.shapes.some((s) =>
@@ -664,6 +700,9 @@ function matched(q: ItemQuery): MockItem[] {
   return r;
 }
 
+/** A parent: a child of it is where it is (both live, or both in the trash; db.rs `HAS_CHILDREN`). */
+const hasChildren = (p: MockItem) => items.some((c) => c.parentId === p.id && (c.deletedAt === null) === (p.deletedAt === null));
+
 /** Counts per value of each filter condition, as db.rs `facet_counts`. */
 function facets(q: ItemQuery) {
   const r = matched(q);
@@ -688,6 +727,9 @@ function facets(q: ItemQuery) {
       fonts.flatMap((i) => (i.fontFeatures ?? []).map((k) => ({ k }))),
       (x) => x.k,
     ),
+    parents: r.filter(hasChildren).length,
+    children: r.filter((i) => !!i.parentId).length,
+    unlinked: r.filter((i) => !i.parentId && !hasChildren(i)).length,
   };
 }
 
@@ -884,6 +926,8 @@ function handle(cmd: string, a: any): unknown {
     if (item && op === "set_checked") item.options.checked = a.checked;
     return null;
   }
+  // Left out of a build with fewer features, like src-tauri/src/limits.rs.
+  if (LEFT_OUT.has(cmd)) throw "このビルドでは使えません";
   switch (cmd) {
     case "open_last_library":
     case "create_library":
@@ -1262,13 +1306,8 @@ function handle(cmd: string, a: any): unknown {
       return effects;
     }
     case "supported_exts":
-      return [
-        ...["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif"],
-        ...["ttf", "otf", "woff", "woff2", "ttc", "otc"],
-        ...["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key"],
-        ...["md", "markdown", "txt", "csv", "tsv"],
-        ...["mp4", "m4v", "mov", "webm"],
-      ];
+      // A build with fewer kinds takes theirs only (src-tauri/src/limits.rs `accepts`).
+      return KIND_EXTS.filter(([k]) => buildHas(k)).flatMap(([, exts]) => exts);
     case "import_paths":
     case "import_bytes":
       return { imported: 0, duplicates: 0, failed: ["mock backend: import is not available in the browser"] };
@@ -1416,6 +1455,40 @@ function handle(cmd: string, a: any): unknown {
         c.adopted = false;
       }
       return out;
+    }
+    // A video's own thumbnail (videos/thumb.rs). A file or the clipboard can't be read here: a stand-in.
+    case "set_video_thumb": {
+      const v = items.find((i) => i.id === a.id);
+      if (!v || v.kind !== "video") throw "サムネイルを変えられるのは動画だけです";
+      const src: { from: string; id?: string } = a.source;
+      const from =
+        src.from === "item"
+          ? items.find((i) => i.id === src.id)
+          : src.from === "adopted"
+            ? items.find((i) => i.parentId === v.id && i.adopted && i.deletedAt === null)
+            : { ...v, kind: "image" as const, hue: (v.hue + 180) % 360 };
+      if (!from) throw src.from === "adopted" ? "採用した子がありません" : "画像が見つかりません";
+      v.customThumb = view(from).thumbPath;
+      return `${v.id}_c${Date.now()}.jpg`;
+    }
+    case "reset_video_thumb": {
+      const v = items.find((i) => i.id === a.id);
+      if (v) delete v.customThumb;
+      return;
+    }
+    case "make_parent": {
+      if (librarySettings.links !== true) throw "親子関係が無効です。設定で有効にしてください。";
+      const c = items.find((i) => i.id === a.id);
+      const old = c?.parentId && items.find((i) => i.id === c.parentId);
+      if (!c || !old) return [];
+      const siblings = items.filter((i) => i.parentId === old.id && i.id !== c.id);
+      const was = [c, old, ...siblings].map((i) => placementOf(i.id));
+      c.parentId = null;
+      c.adopted = false;
+      old.parentId = c.id;
+      old.adopted = false;
+      siblings.forEach((i) => (i.parentId = c.id));
+      return was;
     }
     case "restore_links":
       for (const p of a.placements as ReturnType<typeof placementOf>[]) {

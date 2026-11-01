@@ -105,7 +105,9 @@ export const VIDEO_EXTS = ["mp4", "m4v", "mov", "webm"];
 
 /** The kind a file type is imported as. */
 export const kindOfExt = (ext: string): ItemKind =>
-  FONT_EXTS.includes(ext)
+  ext === "url"
+    ? "bookmark"
+    : FONT_EXTS.includes(ext)
     ? "font"
     : FILE_EXTS.includes(ext)
       ? "file"
@@ -279,6 +281,8 @@ export interface Item {
   thumbPath: string;
   /** What the viewer shows: the display copy if any, else the original. */
   displayPath: string;
+  /** A video's thumbnail is one the user set, not the frame from the OS (docs/VIDEO.md). */
+  ownThumb: boolean;
   /** Similar view only: items with the same number look alike. Best copy first. */
   group?: number;
   /** Similar view only: differing hash bits (of 64) from the group's best copy. */
@@ -365,6 +369,11 @@ export interface Filter {
   /** bytes */
   minSize: number | null;
   maxSize: number | null;
+  /** Only items with children (links on, docs/LINKS.md). */
+  parentsOnly: boolean;
+  /** Only items linked to a parent / outside every link (docs/LINKS.md). At most one of the three. */
+  childrenOnly: boolean;
+  unlinkedOnly: boolean;
 }
 
 export const EMPTY_FILTER: Filter = {
@@ -383,6 +392,9 @@ export const EMPTY_FILTER: Filter = {
   importedBefore: null,
   minSize: null,
   maxSize: null,
+  parentsOnly: false,
+  childrenOnly: false,
+  unlinkedOnly: false,
 };
 
 /** Saved conditions of a smart folder (same shape as the ad-hoc ones). */
@@ -405,6 +417,13 @@ export interface SmartFolder {
 
 /** How alike images must be to count as duplicates: strict, standard, loose. */
 export type SimilarLevel = "strict" | "standard" | "loose";
+
+/** Where a video's own thumbnail comes from (videos/thumb.rs `Source`). */
+export type VideoThumbSource =
+  | { from: "file"; path: string }
+  | { from: "clipboard" }
+  | { from: "item"; id: string }
+  | { from: "adopted" };
 
 /** Where a child stood before its links changed (docs/LINKS.md). */
 export interface LinkPlacement {
@@ -450,6 +469,10 @@ export interface Facets {
   fontCategories: Record<string, number>;
   fontWeights: Record<string, number>;
   fontFeatures: Record<string, number>;
+  /** Items with children. */
+  parents: number;
+  children: number;
+  unlinked: number;
 }
 
 export interface Counts {
@@ -616,6 +639,10 @@ export const api = {
   revealItem: (id: string) => invoke<void>("reveal_item", { id }),
   /** A video's codecs, read from its headers (null = not found). */
   videoCodecs: (id: string) => invoke<VideoCodecs>("video_codecs", { id }),
+  /** Gives a video a thumbnail of the user's (docs/VIDEO.md); returns its file name. */
+  setVideoThumb: (id: string, source: VideoThumbSource) => invoke<string>("set_video_thumb", { id, source }),
+  /** Back to the frame from the OS. */
+  resetVideoThumb: (id: string) => invoke<void>("reset_video_thumb", { id }),
   openItems: (ids: string[]) => invoke<void>("open_items", { ids }),
   setRating: (ids: string[], rating: number) => invoke<void>("set_rating", { ids, rating }),
   setFavorite: (ids: string[], on: boolean) => invoke<void>("set_favorite", { ids, on }),
@@ -716,6 +743,8 @@ export const api = {
   linkItems: (parentId: string, ids: string[]) => invoke<LinkPlacement[]>("link_items", { parentId, ids }),
   unlinkItems: (ids: string[]) => invoke<LinkPlacement[]>("unlink_items", { ids }),
   restoreLinks: (placements: LinkPlacement[]) => invoke<void>("restore_links", { placements }),
+  /** Makes the child `id` the parent of its family (its parent and the other children go under it). */
+  makeParent: (id: string) => invoke<LinkPlacement[]>("make_parent", { id }),
   countLinks: () => invoke<number>("count_links"),
   /** Picks a child as the adopted one of its parent's children (or takes the pick back). */
   setAdopted: (id: string, on: boolean) => invoke<void>("set_adopted", { id, on }),

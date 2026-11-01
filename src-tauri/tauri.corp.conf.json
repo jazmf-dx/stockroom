@@ -1,0 +1,16 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Stockroom Corp",
+  "identifier": "com.local.stockroom.corp",
+  "bundle": {
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": false,
+    "resources": null,
+    "windows": {
+      "nsis": { "installerHooks": null }
+    }
+  },
+  "plugins": {
+    "updater": null
+  }
+}

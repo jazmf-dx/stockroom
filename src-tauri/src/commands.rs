@@ -489,6 +489,8 @@ pub struct ItemView {
     thumb_path: String,
     /// What the viewer shows (a JPEG copy for HEIC / TIFF).
     display_path: String,
+    /// A video's thumbnail is one the user set (docs/VIDEO.md).
+    own_thumb: bool,
 }
 
 /// Off the main thread, and the similar view's grouping (slow on a large
@@ -505,6 +507,7 @@ pub async fn query_items(app: AppHandle, query: ItemQuery) -> CmdResult<Vec<Item
                 file_path: crate::library::file_path(&root, &item).display().to_string(),
                 thumb_path: crate::library::thumb_path(&root, &item).display().to_string(),
                 display_path: crate::library::display_path(&root, &item).display().to_string(),
+                own_thumb: crate::videos::thumb::is_custom(&item.thumb),
                 item,
             })
             .collect())
@@ -651,6 +654,25 @@ pub fn reveal_item(state: State<AppState>, id: String) -> CmdResult<()> {
 pub fn video_codecs(state: State<AppState>, id: String) -> CmdResult<crate::videos::Codecs> {
     let (item, path) = item_paths(&state, &[id])?.pop().ok_or("動画が見つかりません")?;
     Ok(crate::videos::codecs(&path, &item.ext))
+}
+
+/// Gives the video `id` a thumbnail of the user's (docs/VIDEO.md); returns its file name.
+#[tauri::command]
+pub async fn set_video_thumb(app: AppHandle, id: String, source: crate::videos::thumb::Source) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        with_lib(&app.state::<AppState>(), |lib| {
+            let img = crate::videos::thumb::picture(lib, &id, &source)?;
+            crate::videos::thumb::set(lib, &id, &img)
+        })
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Puts the frame from the OS back as the video's thumbnail.
+#[tauri::command]
+pub fn reset_video_thumb(state: State<AppState>, id: String) -> CmdResult<()> {
+    with_lib(&state, |lib| crate::videos::thumb::reset(lib, &id))
 }
 
 /// Opens items in the OS default app.
@@ -1016,7 +1038,8 @@ fn apply_web_import(app: &AppHandle) {
 
 /// At startup: runs the server if the user turned it on earlier.
 pub fn start_web_import(app: &AppHandle) {
-    if load_settings(app).web_import.enabled {
+    // A build without the extension never opens its port (limits.rs).
+    if !crate::limits::NO_CONNECT && load_settings(app).web_import.enabled {
         apply_web_import(app);
     }
 }
@@ -1042,6 +1065,7 @@ pub fn web_import_status(app: AppHandle) -> CmdResult<WebImportStatus> {
 
 #[tauri::command]
 pub async fn set_web_import(app: AppHandle, enabled: bool) -> CmdResult<WebImportStatus> {
+    crate::limits::require_connect()?;
     tauri::async_runtime::spawn_blocking(move || {
         update_settings(&app, |s| {
             s.web_import.enabled = enabled;
@@ -1060,6 +1084,7 @@ pub async fn set_web_import(app: AppHandle, enabled: bool) -> CmdResult<WebImpor
 /// they get the new one (the installed copy is updated here).
 #[tauri::command]
 pub async fn reset_web_import_token(app: AppHandle) -> CmdResult<WebImportStatus> {
+    crate::limits::require_connect()?;
     tauri::async_runtime::spawn_blocking(move || {
         let token = update_settings(&app, |s| {
             s.web_import.token = new_token();
@@ -1095,6 +1120,7 @@ fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
 /// Doing it again updates the files in place, so Chrome keeps the extension.
 #[tauri::command]
 pub async fn install_extension(app: AppHandle) -> CmdResult<String> {
+    crate::limits::require_connect()?;
     tauri::async_runtime::spawn_blocking(move || {
         let src = app.path().resource_dir().map_err(err)?.join("extension");
         if !src.join("manifest.json").is_file() {
@@ -1167,7 +1193,8 @@ fn apply_mcp(app: &AppHandle) {
 
 /// At startup: runs the server if the user turned it on earlier.
 pub fn start_mcp(app: &AppHandle) {
-    if load_settings(app).mcp.enabled {
+    // A build without the Claude connection never opens its port (limits.rs).
+    if !crate::limits::NO_CONNECT && load_settings(app).mcp.enabled {
         apply_mcp(app);
     }
 }
@@ -1206,6 +1233,7 @@ pub fn mcp_status(app: AppHandle) -> McpStatus {
 
 #[tauri::command]
 pub async fn set_mcp(app: AppHandle, enabled: bool) -> CmdResult<McpStatus> {
+    crate::limits::require_connect()?;
     tauri::async_runtime::spawn_blocking(move || {
         update_settings(&app, |s| {
             s.mcp.enabled = enabled;
@@ -1224,6 +1252,7 @@ pub async fn set_mcp(app: AppHandle, enabled: bool) -> CmdResult<McpStatus> {
 /// they are set up again (Claude Desktop reads it from the settings by itself).
 #[tauri::command]
 pub async fn reset_mcp_token(app: AppHandle) -> CmdResult<McpStatus> {
+    crate::limits::require_connect()?;
     tauri::async_runtime::spawn_blocking(move || {
         update_settings(&app, |s| s.mcp.token = new_token())?;
         apply_mcp(&app);
@@ -1408,7 +1437,7 @@ fn release_page(version: &str) -> CmdResult<String> {
 
 #[tauri::command]
 pub fn supported_exts() -> Vec<&'static str> {
-    import::SUPPORTED_EXTS.to_vec()
+    import::SUPPORTED_EXTS.iter().copied().filter(|e| crate::limits::accepts(e)).collect()
 }
 
 // -------------------------------------------------------------- folders
@@ -1471,6 +1500,18 @@ pub fn link_items(state: State<AppState>, parent_id: String, ids: Vec<String>) -
 #[tauri::command]
 pub fn unlink_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<Vec<db::Placement>> {
     with_lib(&state, |lib| db::unlink_items(&lib.conn, &ids).map_err(err))
+}
+
+/// Makes the child `id` the parent of its family: its parent and the other
+/// children go under it. Returns where they all stood, for the undo.
+#[tauri::command]
+pub fn make_parent(state: State<AppState>, id: String) -> CmdResult<Vec<db::Placement>> {
+    with_lib(&state, |lib| {
+        if !db::links_enabled(&lib.conn).map_err(err)? {
+            return Err("親子関係が無効です。設定で有効にしてください。".into());
+        }
+        db::make_parent(&lib.conn, &id).map_err(err)
+    })
 }
 
 /// Puts children back as `link_items` / `unlink_items` found them.
