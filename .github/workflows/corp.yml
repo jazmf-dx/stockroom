@@ -2,11 +2,10 @@ name: corp
 
 # The work edition (docs/CORP.md): a Windows installer built with fewer
 # features (docs/LIMITS.md) and src-tauri/tauri.corp.conf.json. It is checked
-# by the company's security software before it is handed out, so this only
-# leaves the installer and its SHA-256 in the run's Artifacts: no GitHub
-# release, no updater files.
+# by the company's security software before it is handed out, so a corp-v*
+# tag only creates a draft release: the in-app updater sees it once it is
+# published, after the check (docs/CORP.md, "リリース").
 on:
-  workflow_dispatch:
   push:
     tags: ["corp-v*"]
 
@@ -15,8 +14,9 @@ on:
 env:
   STOCKROOM_KINDS: image
   STOCKROOM_NO_CONNECT: "1"
-  STOCKROOM_NO_UPDATE: "1"
   STOCKROOM_NAME: Stockroom（社内版）
+  # Release tags are corp-vX.Y.Z: the app's 更新内容を見る opens that page.
+  STOCKROOM_TAG_PREFIX: corp-
 
 jobs:
   test:
@@ -38,6 +38,12 @@ jobs:
   build:
     needs: test
     runs-on: windows-latest
+    # The signing key is an environment secret of corp-release, which only
+    # corp-v* tags can use (docs/CORP.md, "署名の鍵").
+    environment: corp-release
+    # Needed to create the draft release and upload to it.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -50,8 +56,22 @@ jobs:
           workspaces: src-tauri
           save-if: false
       - run: bun install --frozen-lockfile
-      # No signing key: the work edition has no updater files to sign.
-      - run: bunx tauri build --config src-tauri/tauri.corp.conf.json
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The work edition's own key (not the personal edition's); the
+          # public key is in tauri.corp.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CORP_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.CORP_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          args: --config src-tauri/tauri.corp.conf.json
+          # latest.json points at the -setup.exe: the same file as the installer.
+          updaterJsonPreferNsis: true
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          releaseBody: "社内版。検査を通ってから Publish する（docs/CORP.md）"
+          # Not seen by the updater until published, after the check.
+          releaseDraft: true
       # What was submitted for the check and what is handed out must be the
       # same file: compare this hash before handing it out.
       - name: SHA-256 of the installer
@@ -66,4 +86,5 @@ jobs:
           name: stockroom-corp-${{ github.ref_name }}
           path: |
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sig
             src-tauri/target/release/bundle/nsis/SHA256SUMS.txt
