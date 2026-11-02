@@ -43,6 +43,14 @@ git push origin main
 
 社内版だけのファイルは upstream にないので、通常は衝突しない。
 
+取り込んだあとで `git diff upstream/main main --stat` を見ると、上の「社内版だけのファイル」の 3 つだけが出る。ほかのファイルが出たら、jazmf-dx で直接変えたものがあるので、upstream に入れ直す。
+
+### 個人版のワークフロー
+
+upstream から来る `.github/workflows/build.yml`（個人版のリリース）は、jazmf-dx では使わない。個人版の更新ファイルに署名する鍵（`TAURI_SIGNING_PRIVATE_KEY`）を会社のリポジトリに置かないので、`main` に push するたびに最後の署名で失敗する。
+
+ファイルを変えると取り込みのたびに衝突するので、GitHub の画面で止める：Actions → build →「…」→ **Disable workflow**。
+
 ## リリース
 
 1. upstream を取り込む（上の手順）
