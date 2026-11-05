@@ -84,9 +84,9 @@
 
 **残っているずれ**：最小ウインドウ（900px、両パネル開）で「重複の候補」を開くと、「似ている度合い」が帯の 3 行目に回る。その幅では帯がすでに 2 行なので許容する。
 
-## 色（ダーク）
+## 色（ダーク／ライト）
 
-今はダークのみ（ライトは未実装、[SETTINGS.md](SETTINGS.md)）。色は Apple HIG（Dark Mode・Color・Accessibility）、Material Design 3（Color roles・States・Segmented buttons）、WCAG 2.2 に合わせ、`src/index.css` の `@theme` に役割の名前で置く。部品は値を直接書かず、この名前を使う。ライトを作るときは値を差し替える。
+ダークとライトの両方があり、既定は OS の外観に従う。設定画面の「一般 → 外観」で「システムに合わせる／ライト／ダーク」を選べる（`settings.json` の `appearance`）。ダークは `@theme`、ライトは同じ名前を `index.css` の `:root[data-theme="light"]` で差し替える。`<html data-theme>` には、選んだ結果（システムならいまの OS の外観）を `lib/appearance.ts` が入れる。ウインドウのテーマも合わせて変える（capabilities の `core:window:allow-set-theme`）ので、スクロールバーなどネイティブの部品もついてくる。下の表の値はダーク。ライトでは「白の透明度」が「黒の透明度」になる。部品は白や黒の透明度を直接書かず、`bg-ink/10` のように `ink`（ダークは白、ライトは黒）を使う。写真を載せる面（ビューア・サムネイルのバッジ・HUD）と、白い文字を載せる `accent-fill` は、どちらでも同じ色のまま。ネイティブの部品は `color-scheme` で合わせる。色は Apple HIG（Dark Mode・Color・Accessibility）、Material Design 3（Color roles・States・Segmented buttons）、WCAG 2.2 に合わせ、`src/index.css` の `@theme` に役割の名前で置く。部品は値を直接書かず、この名前を使う。新しい色は両方の値を決めてから足す。
 
 | 役割 | 名前 | 値 | 使うところ |
 |---|---|---|---|
