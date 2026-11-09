@@ -63,3 +63,15 @@ export function applyAppearance(a: Appearance) {
 export function setUpAppearance() {
   applyAppearance(cached());
 }
+
+export const APPEARANCES: { key: Appearance; label: string }[] = [
+  { key: "system", label: "システムに合わせる" },
+  { key: "light", label: "ライト" },
+  { key: "dark", label: "ダーク" },
+];
+
+/** The quick switch's order: システム → ライト → ダーク → システム. */
+export const nextAppearance = (a: Appearance): Appearance =>
+  a === "system" ? "light" : a === "light" ? "dark" : "system";
+
+export const appearanceLabel = (a: Appearance) => APPEARANCES.find((x) => x.key === a)?.label ?? "";

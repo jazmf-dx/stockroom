@@ -6,12 +6,15 @@ import {
   CopyCheck,
   FolderSearch,
   Minus,
+  Monitor,
+  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Plus,
   Search,
+  Sun,
   Tag as TagIcon,
   Trash2,
   X,
@@ -28,6 +31,7 @@ import {
 import { type Folder, type ItemKind, type SimilarLevel, type SmartFolder, type SortKey, type Tag, type View } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { command } from "../lib/commands";
+import { appearanceLabel, nextAppearance, parseAppearance } from "../lib/appearance";
 import { useShallow } from "zustand/react/shallow";
 import { activeConditions, listKinds, placeTotal, useStore } from "../store";
 import { PIXEL_KINDS } from "../lib/kinds";
@@ -170,6 +174,7 @@ export function Toolbar() {
             )}
           </h1>
           <div className="flex-1" />
+          <ThemeToggle className="hidden @max-xl:flex" />
           <InspectorToggle className="hidden @max-xl:flex" />
         </div>
         <div className="flex flex-1 items-center justify-end gap-2">
@@ -191,6 +196,7 @@ export function Toolbar() {
               <X size={14} />
             </button>
           </label>
+          <ThemeToggle className="flex @max-xl:hidden" />
           <InspectorToggle className="flex @max-xl:hidden" />
         </div>
       </div>
@@ -380,6 +386,22 @@ function ThumbSize({ hidden }: { hidden: boolean }) {
         <Plus size={13} />
       </button>
     </div>
+  );
+}
+
+/** Appearance in one click (docs/UI.md「色」): システム → ライト → ダーク. The icon is the current choice. */
+function ThemeToggle({ className }: { className: string }) {
+  const current = parseAppearance(useStore((s) => s.appSettings?.appearance));
+  const next = nextAppearance(current);
+  return (
+    <button
+      title={`外観：${appearanceLabel(current)}（クリックで「${appearanceLabel(next)}」。⌘/Ctrl+Shift+D）`}
+      aria-label={`外観を${appearanceLabel(next)}にする`}
+      onClick={() => command("view.appearance").run(useStore.getState())}
+      className={`h-8 w-8 shrink-0 items-center justify-center rounded-md ghost ${className}`}
+    >
+      {current === "system" ? <Monitor size={15} /> : current === "light" ? <Sun size={15} /> : <Moon size={15} />}
+    </button>
   );
 }
 
