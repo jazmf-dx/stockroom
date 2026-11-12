@@ -1,6 +1,6 @@
 [package]
 name = "stockroom"
-version = "0.41.1"
+version = "0.43.0"
 description = "A local stockroom for everything you collect"
 authors = ["you"]
 edition = "2021"
@@ -78,7 +78,7 @@ strip = true
 [dev-dependencies]
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation", "Win32_Networking_WinHttp", "Data_Pdf", "Storage_Streams"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation", "Win32_Networking_WinHttp", "Data_Pdf", "Storage_Streams", "Win32_UI_Shell"] }
 
 # System proxy lookup (PAC) for the updater, see proxy.rs.
 [target."cfg(target_os = \"macos\")".dependencies]
