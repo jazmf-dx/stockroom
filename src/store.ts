@@ -59,6 +59,26 @@ export interface ToastAction {
   onClick: () => void;
 }
 
+/**
+ * An operation ⌘Z can take back (docs/NOTIFICATIONS.md). Its toast's 元に戻す,
+ * when it has one, does the same once.
+ */
+export interface UndoEntry {
+  /** What was done, for the menu and the HUD ("シェルフから外す"). */
+  label: string;
+  /** Takes it back; resolves to whether that worked. */
+  undo: () => Promise<boolean>;
+  /** The toast that tells of it, closed when it is taken back. */
+  toast?: number;
+  /** The toast's button is its 元に戻す (not another one, like シェルフを表示). */
+  button?: boolean;
+  /** Taken back already (from ⌘Z or the toast). */
+  done?: boolean;
+}
+
+/** How many operations ⌘Z can go back through. */
+const UNDO_DEPTH = 20;
+
 /** A duplicate tidy-up awaiting confirmation; `effects` fills in once previewed. */
 export interface DuplicateReview {
   groups: { keep: Item; remove: Item[] }[];
@@ -181,6 +201,11 @@ interface State {
   openParents: ReadonlySet<string>;
   inspectorOpen: boolean;
   sidebarOpen: boolean;
+  /**
+   * The filter row under the toolbar is open: the user's choice, kept
+   * (docs/NAVIGATION.md「ツールバー」). A smart folder shows it anyway (`filterRowShown`).
+   */
+  filterRowOpen: boolean;
   /** The list's table of contents (the sections to jump to) is open. Not kept: it closes on its own. */
   tocOpen: boolean;
   /** Widths of the sidebar and the details panel (px), dragged at their edge. */
@@ -248,8 +273,20 @@ interface State {
   shelf: Item[];
   /** What the details panel on the right shows: the selection's information or the shelf; changed only by the user. */
   panelTab: PanelTab;
-  /** The comparison of the shelf's images is shown in place of the list. */
+  /**
+   * 広げたシェルフ（`view` が `tray`）を比較の見せ方で出している（docs/SHELF.md「広げる」）。
+   * 一覧の見せ方のときは false。シェルフを広げていないときはいつも false。
+   */
   comparing: boolean;
+  /** シェルフを広げる前にいた場所。「戻す」でここへ戻る（広げていないときは null）。 */
+  shelfReturn: View | null;
+  /** シェルフの見せ方：タイル（画像だけを正方形で）かリスト（docs/SHELF.md）。 */
+  shelfView: "tile" | "list";
+  /** シェルフの置き方：情報とタブで切り替えるか、情報の下に並べるか。 */
+  shelfLayout: "tab" | "split";
+  /** 情報の下に並べるとき、シェルフの高さ（px）と、見出しだけに畳んでいるか。 */
+  shelfHeight: number;
+  shelfFolded: boolean;
   /** Comparison: the zoom (1 = whole) and the point at the frames' centre (0-1), shared by all images. */
   compareLook: CompareLook;
   /** Bands of `items`: similar-view groups, or the `groupBy` sections. */
@@ -282,6 +319,8 @@ interface State {
   /** Hashing older images before the similar view can be shown. */
   analyzing: boolean;
   toasts: Toast[];
+  /** What ⌘Z takes back, oldest first. Only in memory, for the open library. */
+  undoStack: UndoEntry[];
 
   setLibrary: (lib: LibraryInfo | null) => Promise<void>;
   /** Narrows the list to these kinds (none = every kind the library is used for). */
@@ -311,6 +350,7 @@ interface State {
   /** Opens every parent's children in the list, or closes them all. */
   setAllParents: (open: boolean) => void;
   toggleInspector: () => void;
+  toggleFilterRow: () => void;
   setPanelTab: (tab: PanelTab) => void;
   /**
    * ⌘I / ⌘⌥3: shows `tab` in the details panel (opening it, or switching from
@@ -318,6 +358,14 @@ interface State {
    */
   togglePanelTab: (tab: PanelTab) => void;
   setComparing: (on: boolean) => void;
+  /** シェルフを一覧の場所に広げる（docs/SHELF.md）。`look`：一覧か比較か。 */
+  openShelf: (look: "list" | "compare") => void;
+  /** 広げたシェルフを閉じて、広げる前の場所へ戻る。 */
+  closeShelf: () => void;
+  setShelfView: (v: "tile" | "list") => void;
+  setShelfLayout: (v: "tab" | "split") => void;
+  setShelfHeight: (px: number) => void;
+  setShelfFolded: (folded: boolean) => void;
   setCompareLook: (look: CompareLook | ((l: CompareLook) => CompareLook)) => void;
   toggleSidebar: () => void;
   setTocOpen: (open: boolean) => void;
@@ -377,6 +425,9 @@ interface State {
   /** A toast with a title, detail line and kind (results worth noticing). Returns its id. */
   notify: (t: ToastOptions) => number;
   dismissToast: (id: number) => void;
+  pushUndo: (e: UndoEntry) => void;
+  /** Takes `e` off what ⌘Z goes through. */
+  dropUndo: (e: UndoEntry) => void;
   /**
    * Runs a mutation, reports errors, then refreshes. Resolves to whether it
    * worked: a result message must not follow the error toast.
@@ -419,7 +470,18 @@ const clampWidth = (panel: keyof typeof PANEL_WIDTH, px: number) =>
 export type PanelTab = "info" | "shelf";
 
 /** The shelf is in view: the details panel is open on it. */
-export const shelfShown = (s: { inspectorOpen: boolean; panelTab: PanelTab }) => s.inspectorOpen && s.panelTab === "shelf";
+export const shelfShown = (
+  s: Pick<State, "inspectorOpen" | "panelTab" | "view" | "shelfLayout" | "shelfFolded">,
+) =>
+  s.view.kind === "tray" ||
+  (s.inspectorOpen && (s.shelfLayout === "split" ? !s.shelfFolded : s.panelTab === "shelf"));
+
+/**
+ * The filter row is on screen: opened by the user, or a smart folder is open
+ * (its conditions are shown there; leaving it brings back the user's choice).
+ */
+export const filterRowShown = (s: Pick<State, "filterRowOpen" | "view" | "editingSmart">) =>
+  s.filterRowOpen || s.view.kind === "smart" || s.editingSmart !== null;
 
 const loadJson = (key: string): object => {
   try {
@@ -501,8 +563,8 @@ let refreshSeq = 0;
  */
 export function toastDuration(kind: ToastKind, text: string, action: boolean): number {
   if (kind === "error") return 0;
-  const read = 4000 + 80 * text.length;
-  return Math.round(Math.min(12_000, Math.max(action ? 8000 : 5000, read)));
+  const read = 2000 + 60 * text.length;
+  return Math.round(Math.min(action ? 8000 : 6000, Math.max(action ? 5000 : 3000, read)));
 }
 
 let toastSeq = 0;
@@ -538,7 +600,8 @@ function arrange(s: {
   folders: Folder[];
 }): { items: Item[]; sections: Section[] } {
   if (s.view.kind === "similar") return { items: s.rawItems, sections: similarSections(s.rawItems) };
-  return groupItems(s.rawItems, s.groupBy, s.tags, s.folders, linksFold(s));
+  // 広げたシェルフはシェルフの順のまま並べる（グループ分けしない）。
+  return groupItems(s.rawItems, s.view.kind === "tray" ? "none" : s.groupBy, s.tags, s.folders, linksFold(s));
 }
 
 /** Children go under their parents in the lists, links on (not the trash or the shelf). */
@@ -624,8 +687,9 @@ export function listQuery(s: QueryState, without?: ConditionKey): ItemQuery {
     // The kinds in use, narrowed by the kind filter.
     filter: { ...st.filter, kinds: queryKinds(st) },
     similarLevel: st.similarLevel,
-    sort: st.sort,
-    desc: st.desc,
+    // 広げたシェルフはシェルフの順（docs/SHELF.md）。
+    sort: st.view.kind === "tray" ? "manual" : st.sort,
+    desc: st.view.kind === "tray" ? false : st.desc,
   };
 }
 
@@ -762,6 +826,7 @@ export const useStore = create<State>((set, get) => ({
   thumbSize: loadNumber("thumbSize", 180),
   inspectorOpen: load("inspectorOpen") !== "false",
   sidebarOpen: load("sidebarOpen") !== "false",
+  filterRowOpen: load("filterRowOpen") === "true",
   tocOpen: false,
   sidebarWidth: clampWidth("sidebar", loadNumber("sidebarWidth", PANEL_WIDTH.sidebar.initial)),
   inspectorWidth: clampWidth("inspector", loadNumber("inspectorWidth", PANEL_WIDTH.inspector.initial)),
@@ -799,6 +864,11 @@ export const useStore = create<State>((set, get) => ({
   shelf: [],
   panelTab: load("panelTab") === "shelf" ? "shelf" : "info",
   comparing: false,
+  shelfReturn: null,
+  shelfView: load("shelfView") === "list" ? "list" : "tile",
+  shelfLayout: load("shelfLayout") === "split" ? "split" : "tab",
+  shelfHeight: loadNumber("shelfHeight", 320),
+  shelfFolded: load("shelfFolded") === "1",
   compareLook: WHOLE_LOOK,
   sections: [],
   folders: [],
@@ -831,6 +901,7 @@ export const useStore = create<State>((set, get) => ({
   updating: null,
   analyzing: false,
   toasts: [],
+  undoStack: [],
 
   setLibrary: async (library) => {
     const seq = ++librarySeq;
@@ -864,6 +935,8 @@ export const useStore = create<State>((set, get) => ({
       anchor: null,
       focus: null,
       viewer: null,
+      // What was done in the other library can't be taken back here.
+      undoStack: [],
     });
     if (library) {
       get().refresh();
@@ -967,6 +1040,7 @@ export const useStore = create<State>((set, get) => ({
       view,
       // Going somewhere in the sidebar leaves the comparison for the list.
       comparing: false,
+      ...(view.kind === "tray" ? {} : { shelfReturn: null }),
       selected: new Set(),
       anchor: null,
       focus: null,
@@ -1017,17 +1091,59 @@ export const useStore = create<State>((set, get) => ({
     set({ inspectorOpen });
     persist("inspectorOpen", String(inspectorOpen));
   },
+  toggleFilterRow: () => {
+    const filterRowOpen = !get().filterRowOpen;
+    set({ filterRowOpen });
+    persist("filterRowOpen", String(filterRowOpen));
+  },
   setPanelTab: (panelTab) => {
+    // 情報の下に並べているときは、シェルフを出す＝畳んでいたら開く（タブは無い）。
+    if (get().shelfLayout === "split" && panelTab === "shelf") get().setShelfFolded(false);
     set({ panelTab, inspectorOpen: true });
     persist("panelTab", panelTab);
     persist("inspectorOpen", "true");
   },
   togglePanelTab: (tab) => {
     const s = get();
-    if (s.inspectorOpen && s.panelTab === tab) s.toggleInspector();
+    if (s.shelfLayout === "split" && tab === "shelf") {
+      if (s.inspectorOpen && !s.shelfFolded) s.setShelfFolded(true);
+      else s.setPanelTab("shelf");
+    } else if (s.inspectorOpen && s.panelTab === tab) s.toggleInspector();
     else s.setPanelTab(tab);
   },
-  setComparing: (comparing) => set({ comparing, compareLook: WHOLE_LOOK }),
+  setComparing: (comparing) => {
+    // 比較は広げたシェルフの見せ方。広げていなければ広げてから（docs/SHELF.md）。
+    if (comparing && get().view.kind !== "tray") return get().openShelf("compare");
+    set({ comparing, compareLook: WHOLE_LOOK });
+  },
+  openShelf: (look) => {
+    const s = get();
+    const back = s.view.kind === "tray" ? s.shelfReturn : s.view;
+    if (s.view.kind !== "tray") s.setView({ kind: "tray" });
+    set({ shelfReturn: back, comparing: look === "compare", compareLook: WHOLE_LOOK });
+  },
+  setShelfView: (shelfView) => {
+    set({ shelfView });
+    persist("shelfView", shelfView);
+  },
+  setShelfLayout: (shelfLayout) => {
+    set({ shelfLayout, inspectorOpen: true, ...(shelfLayout === "split" ? { shelfFolded: false } : { panelTab: "shelf" as PanelTab }) });
+    persist("shelfLayout", shelfLayout);
+    persist("shelfFolded", "0");
+  },
+  setShelfHeight: (px) => {
+    const shelfHeight = Math.round(Math.max(120, Math.min(900, px)));
+    set({ shelfHeight });
+    persist("shelfHeight", String(shelfHeight));
+  },
+  setShelfFolded: (shelfFolded) => {
+    set({ shelfFolded });
+    persist("shelfFolded", shelfFolded ? "1" : "0");
+  },
+  closeShelf: () => {
+    const back = get().shelfReturn;
+    get().setView(back && back.kind !== "tray" ? back : { kind: "all" });
+  },
   setCompareLook: (look) => set({ compareLook: typeof look === "function" ? look(get().compareLook) : look }),
   toggleSidebar: () => {
     const sidebarOpen = !get().sidebarOpen;
@@ -1328,6 +1444,8 @@ export const useStore = create<State>((set, get) => ({
     set({ toasts: get().toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) });
     setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), 200);
   },
+  pushUndo: (e) => set({ undoStack: [...get().undoStack, e].slice(-UNDO_DEPTH) }),
+  dropUndo: (e) => set({ undoStack: get().undoStack.filter((x) => x !== e) }),
   run: async (fn) => {
     let ok = true;
     try {
